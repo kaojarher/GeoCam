@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>拍照與地圖定位工具</title>
+    
+    <!-- PWA Primary Color -->
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="GeoCamera">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/684/684908.png">
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- QRCode.js for generating Google Maps QR code dynamically -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+    <!-- Inline Web App Manifest using Data URI -->
+    <link rel="manifest" id="manifest-placeholder">
+
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            touch-action: manipulation;
+        }
+        /* Hide scrollbars for slick mobile look */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        .pulse-ring {
+            animation: pulse-ring 2s cubic-bezier(0.455, 0.03, 0.515, 0.955) infinite;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 0.8; }
+            50% { transform: scale(1.05); opacity: 0.4; }
+            100% { transform: scale(0.95); opacity: 0.8; }
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col justify-between overflow-x-hidden selection:bg-indigo-500 selection:text-white">
+
+    <!-- Header Navbar -->
+    <header class="bg-slate-800/80 backdrop-blur-md sticky top-0 z-30 border-b border-slate-700/50 px-4 py-3 flex justify-between items-center shadow-lg">
+        <div class="flex items-center space-x-2">
+            <div class="bg-gradient-to-tr from-indigo-500 to-purple-500 text-white p-2 rounded-xl shadow-md">
+                <i class="fa-solid me-0 fa-location-dot text-lg"></i>
+            </div>
+            <div>
+                <h1 class="font-bold text-base md:text-lg leading-tight bg-gradient-to-r from-white to-slate-300 bg-clip-text text-transparent">GeoCam拍照定位工具</h1>
+                <p class="text-xs text-slate-400">實時 GPS & OSM 衛星相機</p>
+            </div>
+        </div>
+        
+        <div class="flex items-center space-x-2">
+            <!-- GPS Status Badge -->
+            <div id="gps-status" class="flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                <span id="gps-text">定位中...</span>
+            </div>
+
+            <!-- Install PWA Button (Hidden by default) -->
+            <button id="pwa-install-btn" class="hidden bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-3 py-1.5 rounded-lg shadow-md transition-all flex items-center space-x-1">
+                <i class="fa-solid fa-download"></i>
+                <span class="hidden sm:inline">安裝 App</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 max-w-4xl w-full mx-auto p-3 sm:p-6 flex flex-col gap-4">
+
+        <!-- Camera Container -->
+        <div class="relative bg-black rounded-2xl overflow-hidden shadow-2xl border border-slate-800 aspect-[3/4] sm:aspect-[4/3] flex items-center justify-center">
+            
+            <!-- Live Video Stream -->
+            <video id="video" autoplay playsinline class="w-full h-full object-cover"></video>
+            
+            <!-- Hidden Canvas for Composite Drawing -->
+            <canvas id="canvas" class="hidden"></canvas>
+
+            <!-- Camera Overlay UI -->
+            <div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 flex flex-col gap-2">
+                <!-- Realtime Coordinates Display -->
+                <div class="bg-slate-900/80 backdrop-blur-md p-2.5 rounded-xl border border-white/10 text-xs flex justify-between items-center text-slate-200">
+                    <div class="flex items-center space-x-2">
+                        <i class="fa-solid fa-crosshairs text-indigo-400"></i>
+                        <div>
+                            <span class="text-slate-400">緯度:</span> <span id="lat-display" class="font-mono">--.------</span> |
+                            <span class="text-slate-400">經度:</span> <span id="lng-display" class="font-mono">--.------</span>
+                        </div>
+                    </div>
+                    <span id="accuracy-display" class="text-[10px] bg-slate-800 px-2 py-0.5 rounded text-slate-400 border border-slate-700">精確度: --m</span>
+                </div>
+            </div>
+
+            <!-- Camera Loading Indicator -->
+            <div id="camera-loading" class="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center gap-3 z-10">
+                <i class="fa-solid fa-circle-notch fa-spin text-3xl text-indigo-500"></i>
+                <p class="text-sm text-slate-400">啟動相機鏡頭中...</p>
+            </div>
+        </div>
+
+        <!-- Controls Toolbar -->
+        <div class="bg-slate-800/60 backdrop-blur-md p-4 rounded-2xl border border-slate-700/50 flex items-center justify-around shadow-xl">
+            <!-- Switch Camera Button -->
+            <button id="switch-cam-btn" class="p-3.5 bg-slate-700/80 hover:bg-slate-700 text-slate-200 rounded-full transition-transform active:scale-95 shadow-md flex items-center justify-center">
+                <i class="fa-solid fa-rotate text-lg"></i>
+            </button>
+
+            <!-- Main Shutter Button -->
+            <button id="capture-btn" class="relative group p-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full shadow-lg shadow-indigo-500/30 transition-transform active:scale-95">
+                <div class="w-16 h-16 sm:w-20 sm:h-20 bg-slate-900 rounded-full flex items-center justify-center border-4 border-white">
+                    <div class="w-12 h-12 sm:w-14 sm:h-14 bg-indigo-500 rounded-full group-hover:bg-indigo-400 transition-colors flex items-center justify-center">
+                        <i class="fa-solid fa-camera text-white text-xl"></i>
+                    </div>
+                </div>
+            </button>
+
+            <!-- Refresh Location Button -->
+            <button id="refresh-gps-btn" class="p-3.5 bg-slate-700/80 hover:bg-slate-700 text-slate-200 rounded-full transition-transform active:scale-95 shadow-md flex items-center justify-center">
+                <i class="fa-solid fa-location-crosshairs text-lg"></i>
+            </button>
+        </div>
+
+        <!-- Result Preview Section (Hidden initial state) -->
+        <div id="result-container" class="hidden flex flex-col gap-4 bg-slate-800/80 backdrop-blur-md p-4 sm:p-6 rounded-2xl border border-slate-700/80 shadow-2xl mt-2">
+            <div class="flex items-center justify-between border-b border-slate-700 pb-3">
+                <h2 class="font-bold text-lg text-slate-100 flex items-center gap-2">
+                    <i class="fa-solid fa-image text-indigo-400"></i> 合成照片成果
+                </h2>
+                <span class="text-xs text-slate-400">含 OSM 地圖與 Satellite 定位標籤</span>
+            </div>
+
+            <!-- Composite Output Image -->
+            <div class="relative bg-slate-950 rounded-xl overflow-hidden border border-slate-700 shadow-inner">
+                <img id="result-img" class="w-full h-auto block" alt="合成照片" />
+            </div>
+
+            <!-- Interactive Quick Links -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <a id="osm-link" href="#" target="_blank" class="flex items-center justify-between p-3 bg-slate-900/90 hover:bg-slate-900 border border-slate-700/80 rounded-xl text-slate-300 hover:text-white transition-colors">
+                    <span class="flex items-center gap-2">
+                        <i class="fa-solid fa-map text-emerald-400 text-base"></i>
+                        <span>開啟 OpenStreetMap 地圖</span>
+                    </span>
+                    <i class="fa-solid fa-arrow-up-right-from-square text-slate-500"></i>
+                </a>
+                
+                <a id="gmap-link" href="#" target="_blank" class="flex items-center justify-between p-3 bg-slate-900/90 hover:bg-slate-900 border border-slate-700/80 rounded-xl text-slate-300 hover:text-white transition-colors">
+                    <span class="flex items-center gap-2">
+                        <i class="fa-solid fa-satellite text-sky-400 text-base"></i>
+                        <span>開啟 Google Maps 衛星地圖</span>
+                    </span>
+                    <i class="fa-solid fa-arrow-up-right-from-square text-slate-500"></i>
+                </a>
+            </div>
+
+            <!-- Download and Share Buttons -->
+            <div class="flex gap-3 pt-2">
+                <a id="download-btn" download="geocam_photo.png" class="flex-1 py-3 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-xl shadow-lg transition-colors flex items-center justify-center gap-2 text-sm">
+                    <i class="fa-solid fa-download"></i> 下載完整合成照片
+                </a>
+                <button id="close-result-btn" class="px-4 py-3 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl transition-colors text-sm font-medium">
+                    關閉
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Hidden QR Code generator container -->
+    <div id="qrcode-temp" class="hidden"></div>
+
+    <!-- Footer -->
+    <footer class="text-center py-4 text-xs text-slate-500 border-t border-slate-800/80 mt-6">
+        <p>© GeoCam Tool - 支援離線快取 & 定位地圖圖層合成    高嘉和設計</p>
+    </footer>
+
+    <script>
+        // Web App Manifest Dynamic Generation
+        const manifestData = {
+            "name": "PWA 相機與地圖定位工具",
+            "short_name": "GeoCam",
+            "start_url": "./",
+            "display": "standalone",
+            "background_color": "#0f172a",
+            "theme_color": "#0f172a",
+            "icons": [
+                {
+                    "src": "https://cdn-icons-png.flaticon.com/512/684/684908.png",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "any maskable"
+                }
+            ]
+        };
+        const manifestBlob = new Blob([JSON.stringify(manifestData)], {type: 'application/json'});
+        document.getElementById('manifest-placeholder').setAttribute('href', URL.createObjectURL(manifestBlob));
+
+        // State & DOM Elements
+        let currentStream = null;
+        let facingMode = 'environment'; // Default to back camera
+        let currentLat = null;
+        let currentLng = null;
+        let currentAccuracy = null;
+        let deferredPrompt = null;
+
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const cameraLoading = document.getElementById('camera-loading');
+        const latDisplay = document.getElementById('lat-display');
+        const lngDisplay = document.getElementById('lng-display');
+        const accuracyDisplay = document.getElementById('accuracy-display');
+        const gpsStatus = document.getElementById('gps-status');
+        const gpsText = document.getElementById('gps-text');
+        const resultContainer = document.getElementById('result-container');
+        const resultImg = document.getElementById('result-img');
+        const downloadBtn = document.getElementById('download-btn');
+        const osmLink = document.getElementById('osm-link');
+        const gmapLink = document.getElementById('gmap-link');
+
+        // Start Video Stream
+        async function initCamera() {
+            cameraLoading.classList.remove('hidden');
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            const constraints = {
+                video: {
+                    facingMode: facingMode,
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                },
+                audio: false
+            };
+
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+                await video.play();
+                cameraLoading.classList.add('hidden');
+            } catch (err) {
+                console.error("相機存取失敗:", err);
+                cameraLoading.innerHTML = `
+                    <i class="fa-solid fa-triangle-exclamation text-amber-500 text-3xl"></i>
+                    <p class="text-sm text-slate-300 text-center px-4">無法取得相機權限或裝置不支援<br><span class="text-xs text-slate-500">${err.message}</span></p>
+                `;
+            }
+        }
+
+        // Initialize Geolocation Tracking
+        function initGeolocation() {
+            if (!navigator.geolocation) {
+                updateGPSUI(false, "不支援定位");
+                return;
+            }
+
+            const options = {
+                enableHighAccuracy: true,
+                timeout: 15000,
+                maximumAge: 0
+            };
+
+            navigator.geolocation.watchPosition(
+                (pos) => {
+                    currentLat = pos.coords.latitude;
+                    currentLng = pos.coords.longitude;
+                    currentAccuracy = Math.round(pos.coords.accuracy);
+
+                    latDisplay.textContent = currentLat.toFixed(6);
+                    lngDisplay.textContent = currentLng.toFixed(6);
+                    accuracyDisplay.textContent = `精確度: ${currentAccuracy}m`;
+
+                    updateGPSUI(true, "GPS 已定位");
+                },
+                (err) => {
+                    console.warn("GPS 定位錯誤:", err);
+                    updateGPSUI(false, "定位失敗");
+                },
+                options
+            );
+        }
+
+        function updateGPSUI(isSuccess, text) {
+            gpsText.textContent = text;
+            if (isSuccess) {
+                gpsStatus.className = "flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                gpsStatus.querySelector('span').className = "w-2 h-2 rounded-full bg-emerald-400";
+            } else {
+                gpsStatus.className = "flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-xs bg-rose-500/10 text-rose-400 border border-rose-500/20";
+                gpsStatus.querySelector('span').className = "w-2 h-2 rounded-full bg-rose-400";
+            }
+        }
+
+        // Fetch OpenStreetMap Static Tile as Data URL via Image Loading
+        function fetchOSMTile(lat, lng, zoom = 15) {
+            return new Promise((resolve) => {
+                // Calculate tile coordinates from Lat/Lng
+                const n = Math.pow(2, zoom);
+                const xtile = Math.floor((lng + 180) / 360 * n);
+                const latRad = lat * Math.PI / 180;
+                const ytile = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+                
+                const tileUrl = `https://tile.openstreetmap.org/${zoom}/${xtile}/${ytile}.png`;
+
+                const img = new Image();
+                img.crossOrigin = "Anonymous";
+                img.onload = () => resolve({ img, tileUrl });
+                img.onerror = () => resolve(null); // Fallback gracefully if tile fetch fails offline
+                img.src = tileUrl;
+            });
+        }
+
+        // Generate QR Code Data URL for Google Maps
+        function generateQRCodeDataURL(text) {
+            return new Promise((resolve) => {
+                const tempDiv = document.getElementById('qrcode-temp');
+                tempDiv.innerHTML = '';
+                
+                new QRCode(tempDiv, {
+                    text: text,
+                    width: 120,
+                    height: 120,
+                    correctLevel: QRCode.CorrectLevel.M
+                });
+
+                setTimeout(() => {
+                    const qrImg = tempDiv.querySelector('img') || tempDiv.querySelector('canvas');
+                    if (qrImg) {
+                        resolve(qrImg.tagName === 'CANVAS' ? qrImg.toDataURL() : qrImg.src);
+                    } else {
+                        resolve(null);
+                    }
+                }, 100);
+            });
+        }
+
+        // Capture and Composite Photo
+        async function capturePhoto() {
+            if (!video.videoWidth) return;
+
+            const videoWidth = video.videoWidth;
+            const videoHeight = video.videoHeight;
+
+            // Extra height at bottom for map and details bar
+            const footerHeight = Math.max(220, Math.round(videoHeight * 0.35));
+            canvas.width = videoWidth;
+            canvas.height = videoHeight + footerHeight;
+
+            const ctx = canvas.getContext('2d');
+
+            // 1. Draw Original Camera Frame
+            ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+
+            // 2. Draw Bottom Information Panel Background
+            ctx.fillStyle = '#0f172a'; // Slate 900
+            ctx.fillRect(0, videoHeight, videoWidth, footerHeight);
+
+            // Divider Line
+            ctx.strokeStyle = '#38bdf8'; // Sky blue border accent
+            ctx.lineWidth = Math.max(4, Math.round(videoWidth * 0.005));
+            ctx.beginPath();
+            ctx.moveTo(0, videoHeight);
+            ctx.lineTo(videoWidth, videoHeight);
+            ctx.stroke();
+
+            // Prepare Map Data & Links
+            const lat = currentLat || 0;
+            const lng = currentLng || 0;
+            const osmUrl = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=16/${lat}/${lng}`;
+            const gmapSatUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}&basemap=satellite`;
+
+            // Update interactive HTML links
+            osmLink.href = osmUrl;
+            gmapLink.href = gmapSatUrl;
+
+            // 3. Render OSM Map Preview Box on Bottom Left
+            const padding = 16;
+            const mapBoxSize = footerHeight - (padding * 2);
+            const mapX = padding;
+            const mapY = videoHeight + padding;
+
+            ctx.fillStyle = '#1e293b';
+            ctx.fillRect(mapX, mapY, mapBoxSize, mapBoxSize);
+
+            const tileData = await fetchOSMTile(lat, lng);
+            if (tileData && tileData.img) {
+                ctx.drawImage(tileData.img, mapX, mapY, mapBoxSize, mapBoxSize);
+                
+                // Draw Marker on Map Center
+                ctx.fillStyle = '#ef4444';
+                ctx.beginPath();
+                ctx.arc(mapX + mapBoxSize / 2, mapY + mapBoxSize / 2, mapBoxSize * 0.08, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            } else {
+                // Fallback text if offline/failed tile
+                ctx.fillStyle = '#94a3b8';
+                ctx.font = `${Math.round(mapBoxSize * 0.12)}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.fillText('OSM 地圖預覽', mapX + mapBoxSize / 2, mapY + mapBoxSize / 2);
+            }
+
+            // 4. Render Google Maps QR Code on Bottom Right
+            const qrSize = mapBoxSize;
+            const qrX = videoWidth - padding - qrSize;
+            const qrY = mapY;
+
+            const qrDataUrl = await generateQRCodeDataURL(gmapSatUrl);
+            if (qrDataUrl) {
+                const qrImg = new Image();
+                await new Promise((res) => {
+                    qrImg.onload = res;
+                    qrImg.src = qrDataUrl;
+                });
+                
+                // White background padding for QR Code
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(qrX, qrY, qrSize, qrSize);
+                ctx.drawImage(qrImg, qrX + 6, qrY + 6, qrSize - 12, qrSize - 12);
+            }
+
+            // 5. Render Geolocation & Timestamp Text in Middle
+            const textX = mapX + mapBoxSize + padding;
+            const textWidth = qrX - textX - padding;
+            
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'left';
+
+            const fontSizeTitle = Math.max(14, Math.round(footerHeight * 0.11));
+            const fontSizeBody = Math.max(11, Math.round(footerHeight * 0.08));
+
+            let currentY = mapY + fontSizeTitle;
+
+            // Title
+            ctx.font = `bold ${fontSizeTitle}px sans-serif`;
+            ctx.fillStyle = '#38bdf8'; // Sky blue
+            ctx.fillText('GPS 定位資訊 & 衛星連結', textX, currentY);
+
+            // Coordinates
+            currentY += fontSizeBody * 1.8;
+            ctx.font = `${fontSizeBody}px monospace`;
+            ctx.fillStyle = '#f8fafc';
+            ctx.fillText(`緯度 (LAT): ${lat.toFixed(6)}°`, textX, currentY);
+
+            currentY += fontSizeBody * 1.4;
+            ctx.fillText(`經度 (LNG): ${lng.toFixed(6)}°`, textX, currentY);
+
+            // Accuracy & Timestamp
+            currentY += fontSizeBody * 1.4;
+            ctx.fillStyle = '#94a3b8';
+            ctx.font = `${fontSizeBody * 0.9}px sans-serif`;
+            ctx.fillText(`定位精確度: ±${currentAccuracy || '--'} 米`, textX, currentY);
+
+            currentY += fontSizeBody * 1.3;
+            const now = new Date();
+            const timeStr = now.toLocaleString('zh-TW', { hour12: false });
+            ctx.fillText(`時間: ${timeStr}`, textX, currentY);
+
+            // QR code Label
+            ctx.fillStyle = '#cbd5e1';
+            ctx.font = `${Math.max(9, Math.round(footerHeight * 0.065))}px sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.fillText('掃描開啟 Google 衛星地圖', qrX + qrSize / 2, qrY + qrSize + 12);
+
+            // Output Composite Image
+            const dataUrl = canvas.toDataURL('image/png');
+            resultImg.src = dataUrl;
+            downloadBtn.href = dataUrl;
+            
+            // Scroll to preview smoothly
+            resultContainer.classList.remove('hidden');
+            resultContainer.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        // Event Listeners
+        document.getElementById('capture-btn').addEventListener('click', capturePhoto);
+
+        document.getElementById('switch-cam-btn').addEventListener('click', () => {
+            facingMode = facingMode === 'environment' ? 'user' : 'environment';
+            initCamera();
+        });
+
+        document.getElementById('refresh-gps-btn').addEventListener('click', () => {
+            updateGPSUI(false, "重新定位中...");
+            initGeolocation();
+        });
+
+        document.getElementById('close-result-btn').addEventListener('click', () => {
+            resultContainer.classList.add('hidden');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+
+        // PWA Installation Handling
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            const pwaInstallBtn = document.getElementById('pwa-install-btn');
+            pwaInstallBtn.classList.remove('hidden');
+
+            pwaInstallBtn.addEventListener('click', () => {
+                pwaInstallBtn.classList.add('hidden');
+                deferredPrompt.prompt();
+                deferredPrompt.userChoice.then((choiceResult) => {
+                    if (choiceResult.outcome === 'accepted') {
+                        console.log('使用者接受 PWA 安裝');
+                    }
+                    deferredPrompt = null;
+                });
+            });
+        });
+
+        // Register Service Worker from Inline Data Code
+        if ('serviceWorker' in navigator) {
+            const swCode = `
+                const CACHE_NAME = 'geocam-v1';
+                const urlsToCache = ['./'];
+
+                self.addEventListener('install', (event) => {
+                    event.waitUntil(
+                        caches.open(CACHE_NAME).then((cache) => cache.addAll(urlsToCache))
+                    );
+                });
+
+                self.addEventListener('fetch', (event) => {
+                    event.respondWith(
+                        caches.match(event.request).then((response) => {
+                            return response || fetch(event.request);
+                        })
+                    );
+                });
+            `;
+            const blob = new Blob([swCode], { type: 'text/javascript' });
+            const swUrl = URL.createObjectURL(blob);
+
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register(swUrl)
+                    .then((reg) => console.log('Service Worker 註冊成功:', reg.scope))
+                    .catch((err) => console.log('Service Worker 註冊失敗:', err));
+            });
+        }
+
+        // App Initialization
+        window.onload = () => {
+            initCamera();
+            initGeolocation();
+        };
+    </script>
+</body>
+</html>
